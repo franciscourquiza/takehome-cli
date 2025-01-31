@@ -1,14 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
-	"github.com/olekukonko/tablewriter"
+	"strings"
 	_ "github.com/denisenkom/go-mssqldb"
+	"github.com/olekukonko/tablewriter"
 )
 
 // We define and adapt the struct for properties based on the challenge requirements
@@ -60,7 +62,7 @@ func main() {
 		query, args := buildQuery()
 
 		//Executes the query
-		rows, err := db.Query(query, args...)  
+		rows, err := db.Query(query, args...)
 		if err != nil {
 			log.Fatalf("Query execution failed: %v", err)
 		}
@@ -72,7 +74,7 @@ func main() {
 		//Ask the user if they want to perform another search
 		fmt.Print("Do you want to perform another search? (Y/N): ")
 		var response string
-		fmt.Scanln(&response) 
+		fmt.Scanln(&response)
 
 		//Shows a message if the user input is different from Y or N
 		if response != "N" && response != "n" && response != "Y" && response != "y" {
@@ -87,14 +89,14 @@ func main() {
 	}
 }
 
-//This function constructs the SQL query based on user input
-func buildQuery() (string, []interface{}) {   //This function returns a string(that is the sql query) and a slice of interface(to hold the values that correspond to our query string placeholders)
-	var filters []string                      //Here we create the string that is going to be the sql query
-	var args []interface{}				      //And here we create the slice of interface for the placeholders
+// This function constructs the SQL query based on user input
+func buildQuery() (string, []interface{}) { //This function returns a string(that is the sql query) and a slice of interface(to hold the values that correspond to our query string placeholders)
+	var filters []string   //Here we create the string that is going to be the sql query
+	var args []interface{} //And here we create the slice of interface for the placeholders
 
-	prompts := []struct {                     //Here we define a slice of structs, each struct represents a prompt with two fields
-		Label string						  //Label describes what kind of input is expected
-		Key string							  //Key will match the corresponding database field
+	prompts := []struct { //Here we define a slice of structs, each struct represents a prompt with two fields
+		Label string //Label describes what kind of input is expected
+		Key   string //Key will match the corresponding database field
 	}{
 		{"Square Footage (e.g., > 1000)", "SquareFootage"},
 		{"Lighting (low|medium|high)", "Lighting"},
@@ -103,40 +105,80 @@ func buildQuery() (string, []interface{}) {   //This function returns a string(t
 		{"Bathrooms (e.g., = 2)", "Bathrooms"},
 		{"Latitude (e.g., = 2)", "Latitude"},
 		{"Longitude (e.g., = 2)", "Longitude"},
-		{"Description (e.g., = 2)", "Description"},
-		{"Yard (If Yes( = 'true') / If No( = 'false'))", "Yard"},
-		{"Garage (If Yes( = 'true') / If No( = 'false'))", "Garage"},
-		{"Pool (If Yes( = 'true') / If No( = 'false'))", "Pool"},
+		{"Description (e.g., Modern house)", "Description"},
+		{"Yard (Yes/No)", "Yard"},
+		{"Garage (Yes/No)", "Garage"},
+		{"Pool (Yes/No)", "Pool"},
 	}
 
-	for _, prompt := range prompts {             //For each prompt display a message asking the user filter
-		fmt.Printf("Filter by %s (or leave blank): ", prompt.Label)
-		var input string
-		fmt.Scanln(&input) //Scan input from the user
+	scanner := bufio.NewScanner(os.Stdin) // Safer input handling
 
-		if input != "" {               
-			filters = append(filters, fmt.Sprintf("%s %s", prompt.Key, input))  //If the user applies some filter, append it to the filters slice using the Key and the user Input(for example, SquareFootage > 1000)
-			args = append(args, input)       //Stores the raw input into the args slice that we are going to need for the query placeholders
+	fmt.Println("Enter filters for the property search. Leave blank to skip a filter. \n")
+
+	for _, prompt := range prompts { //For each prompt display a message asking the user filter
+		fmt.Printf("Filter by %s: ", prompt.Label)
+		scanner.Scan()
+		input := strings.TrimSpace(scanner.Text())
+
+		if input != "" {
+			if prompt.Key == "Yard" || prompt.Key == "Garage" || prompt.Key == "Pool" {
+				if input == "yes" || input == "Yes"{
+					input = "= 'true'"
+				} else if input == "no" || input == "No"{
+					input = "= 'false'"
+				} else {
+					fmt.Println("Invalid input. Please enter 'Yes' or 'No'.")
+					continue
+				}
+			}
+			if prompt.Key == "Lighting" {
+				if input == "low" || input == "Low"{
+					input = "='low'"
+				} else if input == "medium" || input == "Medium"{
+					input = "='medium'"
+				} else if input == "high" || input == "High" {
+					input = "='high'"
+				} else {
+					fmt.Println("Invalid input. Please enter 'low' 'medium' or 'high'(Without quotation marks).")
+					scanner.Scan()
+					input = strings.TrimSpace(scanner.Text())
+					if input == "low" || input == "Low"{
+						input = "='low'"
+					} else if input == "medium" || input == "Medium"{
+						input = "='medium'"
+					} else if input == "high" || input == "High" {
+						input = "='high'"
+					}
+				}
+			}
+			if prompt.Key == "Description" {
+                input = fmt.Sprintf("LIKE '%%%s%%'", input) // Matches any string containing the input
+            }
+
+			filters = append(filters, fmt.Sprintf("%s %s", prompt.Key, input)) //If the user applies some filter, append it to the filters slice using the Key and the user Input(for example, SquareFootage > 1000)
+			args = append(args, input)                                         //Stores the raw input into the args slice that we are going to need for the query placeholders
 		}
 	}
 
 	//Combine filters into WHERE clause
 	query := "SELECT SquareFootage, Lighting, Price, Rooms, Bathrooms, Latitude, Longitude, Description, Yard, Garage, Pool FROM Property"
 	if len(filters) > 0 {
-		query += " WHERE " + filters[0]   //First we require to type WHERE so the query works correctly
+		query += " WHERE " + filters[0] //First we require to type WHERE so the query works correctly
 		for i := 1; i < len(filters); i++ {
-			query += " AND " + filters[i]  //After the WHERE, we start to add the AND word and each filter
+			query += " AND " + filters[i] //After the WHERE, we start to add the AND word and each filter
 		}
 	}
 
 	return query, args
 }
 
-func displayResults(rows *sql.Rows) {        //This function constructs the table that shows the query results in the console
-	table := tablewriter.NewWriter(os.Stdout) //Creates a new tablewriter.Writer instance(from TableWriter library) and it will be printed to the standard output, the terminal
+func displayResults(rows *sql.Rows) { //This function constructs the table that shows the query results in the console
+	table := tablewriter.NewWriter(os.Stdout)                                                                                               //Creates a new tablewriter.Writer instance(from TableWriter library) and it will be printed to the standard output, the terminal
 	table.SetHeader([]string{"SquareFt", "Lighting", "Price", "Rooms", "Bathrooms", "Lat", "Lng", "Description", "Yard", "Garage", "Pool"}) //Table header
+	hasRows := false   //Flag to track if rows exist
 
-	for rows.Next() {    //rows.Next is going to verify if there is another row to scan after the first one, in false case, the for loop will finish
+	for rows.Next() { //rows.Next is going to verify if there is another row to scan after the first one, in false case, the for loop will finish
+		hasRows = true
 		var prop Property
 		if err := rows.Scan(&prop.SquareFootage, &prop.Lighting, &prop.Price, &prop.Rooms, &prop.Bathrooms,
 			&prop.Latitude, &prop.Longitude, &prop.Description, &prop.Yard, &prop.Garage, &prop.Pool); err != nil {
@@ -171,5 +213,10 @@ func displayResults(rows *sql.Rows) {        //This function constructs the tabl
 			pool,
 		})
 	}
-	table.Render()
+
+	if !hasRows {
+		fmt.Println("No results for that filters")
+	} else {
+		table.Render() // Render the table only if rows exist
+	}
 }
